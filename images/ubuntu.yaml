@@ -283,8 +283,6 @@ targets:
     create_message: |-
       You just created an {{ image.description }} container.
 
-      To enable SSH, run: apt install openssh-server
-      No default root or user password are set by LXC.
     config:
     - type: all
       before: 5
@@ -437,6 +435,7 @@ packages:
 
   - packages:
     - openssh-client
+    - openssh-server
     - sudo
     - vim
     action: install

@@ -281,7 +281,7 @@ packages:
   sets:
   - packages:
     - cronie
-    - cronie-noanacron
+    - cronie-anacron
     - curl
     - glibc-langpack-en
     - glibc-locale-source
@@ -289,6 +289,7 @@ packages:
     - initscripts
     - iproute
     - openssh-clients
+    - openssh-server
     - passwd
     - policycoreutils
     - rootfiles
