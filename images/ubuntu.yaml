@@ -436,6 +436,7 @@ packages:
   - packages:
     - openssh-client
     - openssh-server
+    - rsync
     - sudo
     - vim
     action: install

@@ -294,6 +294,7 @@ packages:
     - policycoreutils
     - rootfiles
     - rsyslog
+    - rsync
     - sudo
     - vim-minimal
     action: install
