@@ -1,0 +1,116 @@
+# Github action workflow.
+# for each pushed tag, create a release, and build LXC images for the following:
+# - ubuntu 22.04.2 and 24.04, x86_64
+# - rockylinux 8.10 and 10.1, x86_64
+# - centos 7, x86_64
+# use distrobuilder to create an LXC image.
+# Use crazy-max/ghaction-import-gpg@v6 to sign the LXC images
+# publish the LXC images as artifacts attached to the release
+# Build the distrobuilder from source at release distrobuilder-3.2 instead of installing snap
+
+name: Build LXC Images
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+  build-images:
+    needs: create-release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        distro:
+          - name: ubuntu
+            release: "jammy"
+            relnum: "22"
+            arch: x86_64
+          - name: ubuntu
+            release: "noble"
+            relnum: "24"
+            arch: x86_64
+          - name: rockylinux
+            release: "8"
+            relnum: "8"
+            arch: x86_64
+          - name: rockylinux
+            release: "10"
+            relnum: "10"
+            arch: x86_64
+          # - name: centos
+          #   release: "7"
+          #   arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.CICD_SIGN_KEY }}
+          passphrase: ${{ secrets.CICD_SIGN_PASSPHRASE }}
+
+      - name: Test GPG Signing
+        run: |
+          echo blah > mytest
+          set -x
+          gpg --list-secret-keys
+          ls -la
+          gpg --armor --detach-sign mytest
+          ls -l mytest*
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make git golang-go gcc debootstrap rsync gpg squashfs-tools git make build-essential libwin-hivex-perl wimtools genisoimage
+          
+      - name: Build distrobuilder from source
+        run: |
+          git clone https://github.com/Asicware/distrobuilder.git
+          cd distrobuilder
+          git checkout asicware/1.0
+          make
+          
+      - name: Build LXC image
+        run: |
+          sudo ~/go/bin/distrobuilder build-lxc images/${{ matrix.distro.name }}.yaml -o image.release=${{ matrix.distro.release }} -o image.architecture=${{ matrix.distro.arch }}
+          ls -l rootfs.tar.xz meta.tar.xz
+          sudo ln rootfs.tar.xz ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.rootfs.tar.xz
+          sudo ln meta.tar.xz ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.meta.tar.xz
+          
+      - name: Sign LXC image
+        run: |
+          gpg --armor --detach-sign  ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.rootfs.tar.xz
+          gpg --armor --detach-sign  ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.meta.tar.xz
+          
+      - name: Upload files to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.rootfs.tar.xz
+            ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.rootfs.tar.xz.asc
+            ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.meta.tar.xz
+            ${{ matrix.distro.name }}-${{ matrix.distro.relnum }}-${{ matrix.distro.arch }}-default.meta.tar.xz.asc
