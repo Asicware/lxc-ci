@@ -1,0 +1,148 @@
+# Github action workflow.
+# for each pushed tag, create a release, and build LXC images for the following:
+# - ubuntu 22.04.2 and 24.04, x86_64
+# - rockylinux 8.10 and 10.1, x86_64
+# - centos 7, x86_64
+# use distrobuilder to create an LXC image.
+# Use crazy-max/ghaction-import-gpg@v6 to sign the LXC images
+# publish the LXC images as artifacts attached to the release
+# Build the distrobuilder from source at release distrobuilder-3.2 instead of installing snap
+
+name: Build LXC Images
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  check-branch:
+    runs-on: ubuntu-latest
+    outputs:
+      is-main: ${{ steps.check.outputs.is-main }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check if tag is on main branch
+        id: check
+        run: |
+          if git branch --contains ${{ github.sha }} | grep -q "main"; then
+            echo "is-main=true" >> $GITHUB_OUTPUT
+          else
+            echo "is-main=false" >> $GITHUB_OUTPUT
+          fi
+
+  create-release:
+    needs: check-branch
+    if: needs.check-branch.outputs.is-main == 'true'
+    permissions: write-all 
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
+  build-images:
+    needs: create-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        distro:
+          #- name: ubuntu
+          #  release: "22"
+          #  arch: x86_64
+          #- name: ubuntu
+          #  release: "24"
+          #  arch: x86_64
+          #- name: rockylinux
+          #  release: "8"
+          #  arch: x86_64
+          - name: rockylinux
+            release: "10"
+            arch: x86_64
+          #- name: centos
+          #  release: "7"
+          #  arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+          
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make git golang-go gcc debootstrap rsync gpg squashfs-tools git make build-essential libwin-hivex-perl wimtools genisoimage
+          
+      - name: Build distrobuilder from source
+        run: |
+          git clone https://github.com/Asicware/distrobuilder.git
+          cd distrobuilder
+          git checkout asicware/1.0
+          make
+          
+      - name: Import GPG key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.CICD_SIGN_KEY }}
+          
+      - name: Build LXC image
+        run: |
+          sudo distrobuilder build-lxc images/${{ matrix.distro.name }}.yaml -o image.release=${{ matrix.distro.release }} -o image.architecture=${{ matrix.distro.arch }}
+          
+      - name: Sign LXC image
+        run: |
+          gpg --armor --detach-sig rootfs.tar.xz
+          gpg --armor --detach-sig meta.tar.xz
+          
+      - name: Upload to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./rootfs.tar.xz
+          asset_name: ${{ matrix.distro.name }}-${{ matrix.distro.release }}-${{ matrix.distro.arch }}-default.rootfs.tar.xz
+          asset_content_type: application/octet-stream
+          
+      - name: Upload rootfs signature
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./rootfs.tar.xz.asc
+          asset_name: ${{ matrix.distro.name }}-${{ matrix.distro.release }}-${{ matrix.distro.arch }}-default.rootfs.tar.xz.asc
+          asset_content_type: text/plain
+          
+      - name: Upload metadata
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./meta.tar.xz
+          asset_name: ${{ matrix.distro.name }}-${{ matrix.distro.release }}-${{ matrix.distro.arch }}-default.meta.tar.xz
+          asset_content_type: application/x-xz
+          
+      - name: Upload metadata signature
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: .meta.tar.xz.asc
+          asset_name: ${{ matrix.distro.name }}-${{ matrix.distro.release }}-${{ matrix.distro.arch }}-default.meta.tar.xz.asc
+          asset_content_type: text/plain
